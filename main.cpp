@@ -24,15 +24,15 @@ public:
   }
 
   void error(const FlyCapture2::Error& error) {
-    std::cerr << time_from_begin() << " [ERROR] Flycapture: " << error.GetDescription() << std::endl;
+    std::cout << "[" <<time_from_begin() << "]" << " [ERROR] Flycapture: " << error.GetDescription() << std::endl;
   }
 
   void info(const std::string& msg) {
-    std::cerr << time_from_begin() << " [INFO]: " << msg << std::endl;
+    std::cout << "[" <<time_from_begin() << "]" << " [INFO]: " << msg << std::endl;
   }
 
   void error(const std::string& msg) {
-    std::cerr << time_from_begin() << " [ERROR]: " << msg << std::endl;
+    std::cout << "[" <<time_from_begin() << "]" << " [ERROR]: " << msg << std::endl;
   }
 
 
@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  printf(" Starting %lu cameras ", camSerials.size());
+  printf("Starting %lu cameras \n", camSerials.size());
 
   std::vector<std::unique_ptr<FlyCapture2::GigECamera>> cameras;
   for(int serial : camSerials) {
@@ -136,7 +136,11 @@ int main(int argc, char** argv) {
   }
 
   for(const std::unique_ptr<FlyCapture2::GigECamera>& cam : cameras) {
-    cam->StartCapture();
+    FlyCapture2::Error error;
+    if ((error = cam->StartCapture()) != FlyCapture2::PGRERROR_OK) {
+      logger.error(error);
+      return -1;
+    }
   }
 
   int frameCount = 0;
@@ -145,7 +149,14 @@ int main(int argc, char** argv) {
     int camIndex = 0;
     for(const std::unique_ptr<FlyCapture2::GigECamera>& cam : cameras) {
       FlyCapture2::Image image;
-      cam->RetrieveBuffer(&image);
+
+      FlyCapture2::Error error;
+      if ((error = cam->RetrieveBuffer(&image)) != FlyCapture2::PGRERROR_OK) {
+        logger.error(error);
+        printf("skipping frame %05d for cam n.%d\n", frameCount, camIndex);
+        continue;
+      }
+
       char filename[200];
       sprintf(filename, "cam%d_frame_%05d.png", camIndex, frameCount);
       image.Save(filename);
@@ -157,7 +168,10 @@ int main(int argc, char** argv) {
   }
 
   for(const std::unique_ptr<FlyCapture2::GigECamera>& cam : cameras) {
-    cam->StopCapture();
+    FlyCapture2::Error error;
+    if ((error = cam->StopCapture()) != FlyCapture2::PGRERROR_OK) {
+      logger.error(error);
+    }
   }
 
 }
