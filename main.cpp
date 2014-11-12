@@ -11,6 +11,8 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
+#include <algorithm>
 
 #include <signal.h>
 #include <unistd.h>
@@ -24,15 +26,15 @@ public:
   }
 
   void error(const FlyCapture2::Error& error) {
-    std::cout << "[" <<time_from_begin() << "]" << " [ERROR] Flycapture: " << error.GetDescription() << std::endl;
+    std::cout << "[" << time_from_begin() << "]" << " [ERROR] Flycapture: " << error.GetDescription() << std::endl;
   }
 
   void info(const std::string& msg) {
-    std::cout << "[" <<time_from_begin() << "]" << " [INFO]: " << msg << std::endl;
+    std::cout << "[" << time_from_begin() << "]" << " [INFO]: " << msg << std::endl;
   }
 
   void error(const std::string& msg) {
-    std::cout << "[" <<time_from_begin() << "]" << " [ERROR]: " << msg << std::endl;
+    std::cout << "[" << time_from_begin() << "]" << " [ERROR]: " << msg << std::endl;
   }
 
 
@@ -41,8 +43,8 @@ public:
     return diff_ms;
   }
 
-  private:
-    clock::time_point begin;
+private:
+  clock::time_point begin;
 };
 
 Logger logger;
@@ -58,7 +60,8 @@ std::unique_ptr<FlyCapture2::GigECamera> getCameraFromSerialNumber(unsigned int 
     logger.error(error);
     printf("Unable to get camera with serial number %u\n", serialNumber);
     return nullptr;
-  } else {
+  }
+  else {
     logger.info("Got camera");
   }
 
@@ -67,7 +70,8 @@ std::unique_ptr<FlyCapture2::GigECamera> getCameraFromSerialNumber(unsigned int 
     logger.error(error);
     printf("Unable to connect to GigE camera with serial number %u\n", serialNumber);
     return nullptr;
-  } else {
+  }
+  else {
     logger.info("Camera connected");
   }
 
@@ -83,7 +87,8 @@ void printNumberOfAvailableCameras() {
   if((error = busMgr.GetNumOfCameras(&numOfCameras)) != FlyCapture2::PGRERROR_OK) {
     logger.error(error);
     logger.error("Unable to retrieve number of available cameras from bus manager");
-  } else {
+  }
+  else {
     printf("found %d cameras\n", numOfCameras);
   }
 }
@@ -91,7 +96,7 @@ void printNumberOfAvailableCameras() {
 std::vector<int> getSerialsFromArgs(int argc, char** argv) {
   std::vector<int> serials;
 
-  for(int i=1; i < argc; i++) {
+  for(int i = 1; i < argc; i++) {
     char* str = argv[i];
     int serial;
     if(sscanf(str, "%d", &serial) == 1) {
@@ -111,6 +116,49 @@ void sigintHandler(int) {
   running = false;
 }
 
+constexpr std::chrono::milliseconds msSleepForFramerate(int framerate) {
+  return std::chrono::milliseconds(1 / framerate);
+}
+
+void runCameraWithSerial(int serialNumber) {
+  auto cam = getCameraFromSerialNumber(serialNumber);
+
+  if(cam != nullptr) {
+    FlyCapture2::Error error;
+    if((error = cam->StartCapture()) != FlyCapture2::PGRERROR_OK) {
+      logger.error(error);
+      return;
+    }
+
+    int frameCount = 0;
+    while(running) {
+      FlyCapture2::Image image;
+
+      if((error = cam->RetrieveBuffer(&image)) != FlyCapture2::PGRERROR_OK) {
+        logger.error(error);
+        printf("skipping frame %05d for cam with serial %d\n", frameCount, serialNumber);
+        continue;
+      }
+
+      char filename[200];
+      sprintf(filename, "cam%d_frame_%05d.png", serialNumber, frameCount);
+      image.Save(filename);
+
+      char msg[200];
+      sprintf(msg, "captured frame %s\n", filename);
+      logger.info(msg);
+
+      std::this_thread::sleep_for(msSleepForFramerate(40));
+    }
+
+    if((error = cam->StopCapture()) != FlyCapture2::PGRERROR_OK) {
+      logger.error(error);
+    }
+  }
+
+  logger.info("closing thread");
+}
+
 int main(int argc, char** argv) {
   printNumberOfAvailableCameras();
   signal(SIGINT, sigintHandler);
@@ -121,57 +169,17 @@ int main(int argc, char** argv) {
     printUsage();
     return -1;
   }
+  running = true;
 
   printf("Starting %lu cameras \n", camSerials.size());
 
-  std::vector<std::unique_ptr<FlyCapture2::GigECamera>> cameras;
+  std::vector<std::thread> threads;
   for(int serial : camSerials) {
-    auto cam = getCameraFromSerialNumber(serial);
-    if(cam == nullptr) {
-      printf("error while loading camera %d. Aborting.\n", serial);
-      exit(-1);
-    } else {
-      cameras.push_back(std::move(cam));
-    }
+    std::thread thread([serial]() {runCameraWithSerial(serial);});
+    threads.push_back(std::move(thread));
   }
 
-  for(const std::unique_ptr<FlyCapture2::GigECamera>& cam : cameras) {
-    FlyCapture2::Error error;
-    if ((error = cam->StartCapture()) != FlyCapture2::PGRERROR_OK) {
-      logger.error(error);
-      return -1;
-    }
-  }
+  std::for_each(threads.begin(), threads.end(), [](std::thread& t) {t.join();});
 
-  int frameCount = 0;
-  running = true;
-  while(running) {
-    int camIndex = 0;
-    for(const std::unique_ptr<FlyCapture2::GigECamera>& cam : cameras) {
-      FlyCapture2::Image image;
-
-      FlyCapture2::Error error;
-      if ((error = cam->RetrieveBuffer(&image)) != FlyCapture2::PGRERROR_OK) {
-        logger.error(error);
-        printf("skipping frame %05d for cam n.%d\n", frameCount, camIndex);
-        continue;
-      }
-
-      char filename[200];
-      sprintf(filename, "cam%d_frame_%05d.png", camIndex, frameCount);
-      image.Save(filename);
-
-      char msg[200];
-      sprintf(msg, "captured frame %s\n", filename);
-      logger.info(msg);
-    }
-  }
-
-  for(const std::unique_ptr<FlyCapture2::GigECamera>& cam : cameras) {
-    FlyCapture2::Error error;
-    if ((error = cam->StopCapture()) != FlyCapture2::PGRERROR_OK) {
-      logger.error(error);
-    }
-  }
-
+  return 0;
 }
