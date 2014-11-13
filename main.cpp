@@ -135,22 +135,32 @@ int main(int argc, char** argv) {
     }
   }
 
+  int camIndex = 0;
   for(const std::unique_ptr<FlyCapture2::GigECamera>& cam : cameras) {
     FlyCapture2::Error error;
+    printf("starting capture for camera %d\n", camIndex);
     if ((error = cam->StartCapture()) != FlyCapture2::PGRERROR_OK) {
       logger.error(error);
       return -1;
+    } else {
+      printf("start capture ok for camera %d\n", camIndex);
     }
+    camIndex++;
   }
 
   int frameCount = 0;
   running = true;
+
+  logger.info("starting capture");
+
   while(running) {
     int camIndex = 0;
     for(const std::unique_ptr<FlyCapture2::GigECamera>& cam : cameras) {
       FlyCapture2::Image image;
 
       FlyCapture2::Error error;
+      printf("retrieving frame for camera %d\n", camIndex);
+
       if ((error = cam->RetrieveBuffer(&image)) != FlyCapture2::PGRERROR_OK) {
         logger.error(error);
         printf("skipping frame %05d for cam n.%d\n", frameCount, camIndex);
@@ -165,6 +175,7 @@ int main(int argc, char** argv) {
       sprintf(msg, "captured frame %s\n", filename);
       logger.info(msg);
     }
+    frameCount++;
   }
 
   for(const std::unique_ptr<FlyCapture2::GigECamera>& cam : cameras) {
