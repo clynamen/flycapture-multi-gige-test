@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <thread>
 #include <algorithm>
+#include <mutex>
 
 #include <signal.h>
 #include <unistd.h>
@@ -49,6 +50,7 @@ private:
 
 Logger logger;
 bool running;
+std::mutex flycapMutex;
 
 std::unique_ptr<FlyCapture2::GigECamera> getCameraFromSerialNumber(unsigned int serialNumber)
 {
@@ -125,20 +127,29 @@ void runCameraWithSerial(int serialNumber) {
 
   if(cam != nullptr) {
     FlyCapture2::Error error;
+    printf("starting capture for camera %d\n", serialNumber);
+
+    flycapMutex.lock();
     if((error = cam->StartCapture()) != FlyCapture2::PGRERROR_OK) {
       logger.error(error);
       return;
+    } else {
+      printf("start capture ok for camera %d\n", serialNumber);
     }
+    flycapMutex.unlock();
 
     int frameCount = 0;
     while(running) {
       FlyCapture2::Image image;
 
+      printf("retrieving frame for camera %d\n", serialNumber);
+      flycapMutex.lock();
       if((error = cam->RetrieveBuffer(&image)) != FlyCapture2::PGRERROR_OK) {
         logger.error(error);
         printf("skipping frame %05d for cam with serial %d\n", frameCount, serialNumber);
         continue;
       }
+      flycapMutex.unlock();
 
       char filename[200];
       sprintf(filename, "cam%d_frame_%05d.png", serialNumber, frameCount);
@@ -148,6 +159,7 @@ void runCameraWithSerial(int serialNumber) {
       sprintf(msg, "captured frame %s\n", filename);
       logger.info(msg);
 
+      frameCount++;
       std::this_thread::sleep_for(msSleepForFramerate(40));
     }
 
